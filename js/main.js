@@ -1,14 +1,19 @@
 import { createScene } from './scene.js';
-
-const SPIN_SPEED = 0.0005;
+import { createSpinControl } from './spinControl.js';
 
 const canvas = document.getElementById('pao');
 const scene = createScene(canvas);
 
 if (scene) {
-  const frame = elapsed => {
-    scene.draw(elapsed * SPIN_SPEED);
+  const control = createSpinControl(canvas);
+  let previous = performance.now();
+
+  const frame = now => {
+    const { spin, tilt } = control.advance(now - previous);
+    previous = now;
+    scene.draw(spin, tilt);
     requestAnimationFrame(frame);
   };
+
   requestAnimationFrame(frame);
 }

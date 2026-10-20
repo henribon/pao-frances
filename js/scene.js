@@ -2,12 +2,12 @@ import { perspective, rotationX, rotationY, translation, multiply, rotationPart 
 import { VERTEX_SHADER, FRAGMENT_SHADER } from './breadShaders.js';
 import { createBreadMesh } from './breadMesh.js';
 import { halfLength, halfHeight } from './breadSurface.js';
+import { MAX_TILT } from './viewAngles.js';
 
 const FIELD_OF_VIEW = 0.62;
 const NEAR = 0.1;
 const FAR = 24;
-const TILT = 0.5;
-const MARGIN = 1.35;
+const MARGIN = 1.05;
 const MAX_PIXEL_RATIO = 2;
 
 const compileShader = (gl, type, source) => {
@@ -40,7 +40,7 @@ const bindAttribute = (gl, program, name, data, size) => {
   gl.vertexAttribPointer(location, size, gl.FLOAT, false, 0, 0);
 };
 
-const sweptHeight = Math.hypot(halfLength * Math.sin(TILT), halfHeight);
+const sweptHeight = Math.hypot(halfLength * Math.sin(MAX_TILT), halfHeight);
 
 const cameraDistance = aspect => {
   const vertical = Math.tan(FIELD_OF_VIEW / 2);
@@ -89,8 +89,8 @@ export const createScene = canvas => {
   fitToCanvas();
   new ResizeObserver(fitToCanvas).observe(canvas);
 
-  const draw = spin => {
-    const orientation = multiply(rotationX(TILT), rotationY(spin));
+  const draw = (spin, tilt) => {
+    const orientation = multiply(rotationX(tilt), rotationY(spin));
     gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
     gl.uniformMatrix4fv(modelViewLocation, false, multiply(translation(0, 0, -distance), orientation));
     gl.uniformMatrix3fv(normalMatrixLocation, false, rotationPart(orientation));
