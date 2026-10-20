@@ -53,3 +53,5 @@ export const surfacePoint = (lengthwise, around) => {
 export const halfLength = LENGTH / 2;
 
 export const halfHeight = RADIUS * (1 + LIP_HEIGHT) * SECTION_TOP;
+
+export const halfDepth = RADIUS;

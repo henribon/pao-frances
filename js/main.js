@@ -1,17 +1,20 @@
 import { createScene } from './scene.js';
 import { createSpinControl } from './spinControl.js';
+import { createCutControl } from './cutControl.js';
 
 const canvas = document.getElementById('pao');
 const scene = createScene(canvas);
 
 if (scene) {
-  const control = createSpinControl(canvas);
+  const rotation = createSpinControl(canvas);
+  const cut = createCutControl(document.querySelector('.cut'), document.body);
   let previous = performance.now();
 
   const frame = now => {
-    const { spin, tilt } = control.advance(now - previous);
+    const elapsed = now - previous;
     previous = now;
-    scene.draw(spin, tilt);
+    const { spin, tilt } = rotation.advance(elapsed);
+    scene.draw(spin, tilt, cut.advance(elapsed));
     requestAnimationFrame(frame);
   };
 

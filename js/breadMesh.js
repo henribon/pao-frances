@@ -2,7 +2,8 @@ import { surfacePoint } from './breadSurface.js';
 
 const TAU = Math.PI * 2;
 const LENGTH_SEGMENTS = 128;
-const RING_SEGMENTS = 88;
+const HALF_RING_SEGMENTS = 44;
+const CAP_SEGMENTS = 4;
 const DELTA = 0.001;
 
 const difference = (to, from) => [to.x - from.x, to.y - from.y, to.z - from.z];
@@ -24,53 +25,109 @@ const normalAt = (lengthwise, around, origin) => {
   return normalize(cross(alongLength, aroundRing));
 };
 
-const buildAttributes = () => {
-  const rings = LENGTH_SEGMENTS + 1;
-  const count = rings * RING_SEGMENTS;
-  const positions = new Float32Array(count * 3);
-  const normals = new Float32Array(count * 3);
-  const crumb = new Float32Array(count);
-
-  for (let ring = 0; ring < rings; ring += 1) {
-    const lengthwise = ring / LENGTH_SEGMENTS;
-    const sampled = Math.min(Math.max(lengthwise, DELTA), 1 - DELTA);
-    const onAxis = sampled !== lengthwise;
-    for (let step = 0; step < RING_SEGMENTS; step += 1) {
-      const around = (step / RING_SEGMENTS) * TAU;
-      const point = surfacePoint(lengthwise, around);
-      const normal = normalAt(sampled, around, onAxis ? surfacePoint(sampled, around) : point);
-      const vertex = ring * RING_SEGMENTS + step;
-      positions[vertex * 3] = point.x;
-      positions[vertex * 3 + 1] = point.y;
-      positions[vertex * 3 + 2] = point.z;
-      normals[vertex * 3] = normal[0];
-      normals[vertex * 3 + 1] = normal[1];
-      normals[vertex * 3 + 2] = normal[2];
-      crumb[vertex] = point.crumb;
-    }
-  }
-
-  return { positions, normals, crumb };
-};
-
-const buildIndices = () => {
-  const indices = new Uint16Array(LENGTH_SEGMENTS * RING_SEGMENTS * 6);
+const gridIndices = (rows, columns) => {
+  const indices = new Uint16Array((rows - 1) * (columns - 1) * 6);
   let cursor = 0;
-  for (let ring = 0; ring < LENGTH_SEGMENTS; ring += 1) {
-    for (let step = 0; step < RING_SEGMENTS; step += 1) {
-      const next = (step + 1) % RING_SEGMENTS;
-      const current = ring * RING_SEGMENTS;
-      const forward = (ring + 1) * RING_SEGMENTS;
-      indices[cursor] = current + step;
-      indices[cursor + 1] = forward + step;
-      indices[cursor + 2] = current + next;
-      indices[cursor + 3] = forward + step;
-      indices[cursor + 4] = forward + next;
-      indices[cursor + 5] = current + next;
+  for (let row = 0; row < rows - 1; row += 1) {
+    for (let column = 0; column < columns - 1; column += 1) {
+      const current = row * columns + column;
+      const forward = current + columns;
+      indices[cursor] = current;
+      indices[cursor + 1] = forward;
+      indices[cursor + 2] = current + 1;
+      indices[cursor + 3] = forward;
+      indices[cursor + 4] = forward + 1;
+      indices[cursor + 5] = current + 1;
       cursor += 6;
     }
   }
   return indices;
 };
 
-export const createBreadMesh = () => ({ ...buildAttributes(), indices: buildIndices() });
+const allocate = count => ({
+  positions: new Float32Array(count * 3),
+  normals: new Float32Array(count * 3),
+  crumb: new Float32Array(count),
+  shade: new Float32Array(count)
+});
+
+const write = (target, vertex, point, normal, crumb, shade) => {
+  target.positions[vertex * 3] = point.x;
+  target.positions[vertex * 3 + 1] = point.y;
+  target.positions[vertex * 3 + 2] = point.z;
+  target.normals[vertex * 3] = normal[0];
+  target.normals[vertex * 3 + 1] = normal[1];
+  target.normals[vertex * 3 + 2] = normal[2];
+  target.crumb[vertex] = crumb;
+  target.shade[vertex] = shade;
+};
+
+const buildCrust = (fromAngle, toAngle) => {
+  const rows = LENGTH_SEGMENTS + 1;
+  const columns = HALF_RING_SEGMENTS + 1;
+  const target = allocate(rows * columns);
+
+  for (let row = 0; row < rows; row += 1) {
+    const lengthwise = row / LENGTH_SEGMENTS;
+    const sampled = Math.min(Math.max(lengthwise, DELTA), 1 - DELTA);
+    const onAxis = sampled !== lengthwise;
+    for (let column = 0; column < columns; column += 1) {
+      const around = fromAngle + (toAngle - fromAngle) * (column / HALF_RING_SEGMENTS);
+      const point = surfacePoint(lengthwise, around);
+      const origin = onAxis ? surfacePoint(sampled, around) : point;
+      write(target, row * columns + column, point, normalAt(sampled, around, origin), point.crumb, point.crumb);
+    }
+  }
+
+  return { ...target, indices: gridIndices(rows, columns) };
+};
+
+const buildCut = facing => {
+  const rows = LENGTH_SEGMENTS + 1;
+  const columns = CAP_SEGMENTS + 1;
+  const target = allocate(rows * columns);
+  const normal = [0, facing, 0];
+
+  for (let row = 0; row < rows; row += 1) {
+    const lengthwise = row / LENGTH_SEGMENTS;
+    const front = surfacePoint(lengthwise, 0);
+    const back = surfacePoint(lengthwise, Math.PI);
+    const start = facing < 0 ? back.z : front.z;
+    const end = facing < 0 ? front.z : back.z;
+    for (let column = 0; column < columns; column += 1) {
+      const across = column / CAP_SEGMENTS;
+      const point = { x: front.x, y: 0, z: start + (end - start) * across };
+      write(target, row * columns + column, point, normal, 1, 0);
+    }
+  }
+
+  return { ...target, indices: gridIndices(rows, columns) };
+};
+
+const merge = parts => {
+  const vertexCount = parts.reduce((total, part) => total + part.crumb.length, 0);
+  const indexCount = parts.reduce((total, part) => total + part.indices.length, 0);
+  const merged = allocate(vertexCount);
+  const indices = new Uint16Array(indexCount);
+  let vertexOffset = 0;
+  let indexOffset = 0;
+
+  parts.forEach(part => {
+    merged.positions.set(part.positions, vertexOffset * 3);
+    merged.normals.set(part.normals, vertexOffset * 3);
+    merged.crumb.set(part.crumb, vertexOffset);
+    merged.shade.set(part.shade, vertexOffset);
+    for (let index = 0; index < part.indices.length; index += 1) {
+      indices[indexOffset + index] = part.indices[index] + vertexOffset;
+    }
+    vertexOffset += part.crumb.length;
+    indexOffset += part.indices.length;
+  });
+
+  return { ...merged, indices };
+};
+
+export const createBreadHalves = () => ({
+  upper: merge([buildCrust(0, Math.PI), buildCut(-1)]),
+  lower: merge([buildCrust(Math.PI, TAU), buildCut(1)])
+});

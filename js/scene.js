@@ -1,7 +1,7 @@
 import { perspective, rotationX, rotationY, translation, multiply, rotationPart } from './matrix.js';
 import { VERTEX_SHADER, FRAGMENT_SHADER } from './breadShaders.js';
-import { createBreadMesh } from './breadMesh.js';
-import { halfLength, halfHeight } from './breadSurface.js';
+import { createBreadHalves } from './breadMesh.js';
+import { halfLength, halfHeight, halfDepth } from './breadSurface.js';
 import { MAX_TILT } from './viewAngles.js';
 
 const FIELD_OF_VIEW = 0.62;
@@ -9,6 +9,8 @@ const NEAR = 0.1;
 const FAR = 24;
 const MARGIN = 1.05;
 const MAX_PIXEL_RATIO = 2;
+const MAX_OPEN = 1.2;
+const OPEN_ZOOM = 0.3;
 
 const compileShader = (gl, type, source) => {
   const shader = gl.createShader(type);
@@ -31,14 +33,42 @@ const createProgram = (gl, vertexSource, fragmentSource) => {
   return program;
 };
 
-const bindAttribute = (gl, program, name, data, size) => {
+const createAttribute = (gl, program, name, data, size) => {
   const buffer = gl.createBuffer();
   gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
   gl.bufferData(gl.ARRAY_BUFFER, data, gl.STATIC_DRAW);
   const location = gl.getAttribLocation(program, name);
   gl.enableVertexAttribArray(location);
-  gl.vertexAttribPointer(location, size, gl.FLOAT, false, 0, 0);
+  return () => {
+    gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
+    gl.vertexAttribPointer(location, size, gl.FLOAT, false, 0, 0);
+  };
 };
+
+const createDrawable = (gl, program, mesh) => {
+  const attributes = [
+    createAttribute(gl, program, 'aPosition', mesh.positions, 3),
+    createAttribute(gl, program, 'aNormal', mesh.normals, 3),
+    createAttribute(gl, program, 'aCrumb', mesh.crumb, 1),
+    createAttribute(gl, program, 'aShade', mesh.shade, 1)
+  ];
+  const indexBuffer = gl.createBuffer();
+  gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, indexBuffer);
+  gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, mesh.indices, gl.STATIC_DRAW);
+
+  return {
+    count: mesh.indices.length,
+    bind: () => {
+      attributes.forEach(apply => apply());
+      gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, indexBuffer);
+    }
+  };
+};
+
+const hingeMatrix = angle => multiply(
+  translation(0, 0, -halfDepth),
+  multiply(rotationX(-angle), translation(0, 0, halfDepth))
+);
 
 const sweptHeight = Math.hypot(halfLength * Math.sin(MAX_TILT), halfHeight);
 
@@ -52,16 +82,11 @@ export const createScene = canvas => {
   if (!gl) return null;
 
   const program = createProgram(gl, VERTEX_SHADER, FRAGMENT_SHADER);
-  const mesh = createBreadMesh();
+  const halves = createBreadHalves();
 
   gl.useProgram(program);
-  bindAttribute(gl, program, 'aPosition', mesh.positions, 3);
-  bindAttribute(gl, program, 'aNormal', mesh.normals, 3);
-  bindAttribute(gl, program, 'aCrumb', mesh.crumb, 1);
-
-  const indexBuffer = gl.createBuffer();
-  gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, indexBuffer);
-  gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, mesh.indices, gl.STATIC_DRAW);
+  const upper = createDrawable(gl, program, halves.upper);
+  const lower = createDrawable(gl, program, halves.lower);
 
   const projectionLocation = gl.getUniformLocation(program, 'uProjection');
   const modelViewLocation = gl.getUniformLocation(program, 'uModelView');
@@ -89,12 +114,21 @@ export const createScene = canvas => {
   fitToCanvas();
   new ResizeObserver(fitToCanvas).observe(canvas);
 
-  const draw = (spin, tilt) => {
+  const drawPart = (part, modelView) => {
+    part.bind();
+    gl.uniformMatrix4fv(modelViewLocation, false, modelView);
+    gl.uniformMatrix3fv(normalMatrixLocation, false, rotationPart(modelView));
+    gl.drawElements(gl.TRIANGLES, part.count, gl.UNSIGNED_SHORT, 0);
+  };
+
+  const draw = (spin, tilt, openness) => {
     const orientation = multiply(rotationX(tilt), rotationY(spin));
+    const view = translation(0, 0, -distance * (1 + openness * OPEN_ZOOM));
+    const base = multiply(view, orientation);
+
     gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
-    gl.uniformMatrix4fv(modelViewLocation, false, multiply(translation(0, 0, -distance), orientation));
-    gl.uniformMatrix3fv(normalMatrixLocation, false, rotationPart(orientation));
-    gl.drawElements(gl.TRIANGLES, mesh.indices.length, gl.UNSIGNED_SHORT, 0);
+    drawPart(lower, base);
+    drawPart(upper, multiply(base, hingeMatrix(openness * MAX_OPEN)));
   };
 
   return { draw };
