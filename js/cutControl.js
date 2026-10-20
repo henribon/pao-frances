@@ -21,5 +21,5 @@ export const createCutControl = (button, root) => {
     return ease(progress);
   };
 
-  return { advance };
+  return { advance, isOpen: () => target > 0 };
 };
